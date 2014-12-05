@@ -10,21 +10,32 @@ import (
 	"golang.org/x/net/html"
 )
 
+type rInfo struct {
+	url, size string
+}
+type retreInfo struct {
+	m          map[string]rInfo
+	miniPoster string
+}
+
 type Episode struct {
-	id   uint
-	date string
+	id      uint
+	name    string
+	nameEng string
+	date    string
 
 	quality string
 }
 type Season struct {
-	id, episodes             uint
-	poster, details_id, date string
-	full                     bool
-	quality                  string
+	id, amountEpisodes      uint
+	episodes                []Episode
+	poster, detailsId, date string
+	full                    bool
+	quality                 string
 }
 type Serial struct {
 	id, title, title_eng string
-	amount_seasons       uint
+	amountSeasons        uint
 	seasons              []Season
 	status               bool
 	countries            []string
@@ -151,4 +162,73 @@ func Login(login, password string) (*cookiejar.Jar, error) {
 		return nil, err
 	}
 	return cookieJar, nil
+}
+
+func GetRetreInfo(cookie *cookiejar.Jar, id, s, ep string) (*retreInfo, error) {
+	client := &http.Client{Jar: cookie}
+	page, clientErr := client.Get("http://lostfilm.tv/nrdr.php?c=" + id + "&s=" + s + "&e=" + ep)
+	if clientErr != nil {
+		return nil, clientErr
+	}
+	tokenizer := html.NewTokenizer(page.Body)
+	var url string
+	var nextA, nextSpan, textInSpan, imgIsPoster bool
+	tempRetreInfo := new(retreInfo)
+	tempRetreInfo.m = make(map[string]rInfo)
+	for {
+		ty := tokenizer.Next()
+		if ty == html.ErrorToken {
+			break
+		}
+		if ty != html.StartTagToken && ty != html.SelfClosingTagToken && ty != html.TextToken {
+			continue
+		}
+		t := tokenizer.Token()
+		if t.Type == html.TextToken && textInSpan {
+			textInSpan = false
+			quality, size := parseSpanText(t.Data)
+			tempRetreInfo.m[quality] = rInfo{url, size}
+			continue
+		}
+		if t.Data == "img" {
+			for _, attr := range t.Attr {
+				if attr.Key == "src" && !imgIsPoster {
+					tempRetreInfo.miniPoster = attr.Val
+				} else if attr.Key == "align" && attr.Val == "left" {
+					imgIsPoster = true
+				}
+			}
+			if !imgIsPoster {
+				tempRetreInfo.miniPoster = ""
+			}
+		} else if t.Data == "a" {
+			if nextA {
+				nextA = false
+				continue
+			}
+			for _, attr := range t.Attr {
+				if attr.Key == "href" {
+					url = attr.Val
+				}
+			}
+			nextA = true
+			nextSpan = true
+		} else if t.Data == "span" && nextSpan {
+			textInSpan = true
+			nextSpan = false
+		}
+
+	}
+	return tempRetreInfo, nil
+}
+
+func parseSpanText(text string) (quality, size string) {
+	s := strings.Split(text, ". ")
+	if strings.HasPrefix(s[0], "Видео: ") {
+		quality = s[0][12:]
+	}
+	if strings.HasPrefix(s[1], "Размер: ") && strings.HasSuffix(s[1], ".") {
+		size = s[1][14 : len(s[1])-1]
+	}
+	return quality, size
 }
